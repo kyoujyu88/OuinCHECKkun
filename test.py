@@ -142,3 +142,38 @@ def analyze_contracts_akaze(pdf_path, template_path, rel_stamp_coords, debug_fol
             })
 
     return results
+
+# ==========================================
+#   ★ ここから下が実行部分です！ ★
+# ==========================================
+
+if __name__ == "__main__":
+    current_folder = os.path.dirname(os.path.abspath(__file__))
+
+    # 実際のファイル名に合わせて書き換えてくださいね
+    pdf_filename = "sample_contract.pdf"
+    target_pdf = os.path.join(current_folder, pdf_filename)
+    
+    template_filename = "header_template.png"
+    template_img = os.path.join(current_folder, template_filename)
+    
+    # テンプレート画像の左上からのハンコ枠の位置 (右へ, 下へ, 幅, 高さ)
+    stamp_relative_pos = (50, 200, 150, 150) 
+
+    if os.path.exists(target_pdf) and os.path.exists(template_img):
+        data = analyze_contracts_akaze(target_pdf, template_img, stamp_relative_pos, current_folder)
+        
+        if not data:
+            print("\n書類が見つかりませんでした…。（点数が足りなかったみたいです）")
+        else:
+            print(f"\n★ {len(data)} 件の書類が見つかりました！ です！\n")
+            for item in data:
+                result_str = "【合格】押印あり" if item["has_stamp"] else "【未処理】押印なし！！"
+                print(f"ページ: {item['page']} | 特徴の一致点数: {item['score']}点 | 赤色率: {item['red_ratio']:.2%} -> {result_str}")
+            
+            print("\n【確認】『debug_page_〇〇.jpg』という画像が保存されました！")
+    else:
+        print("\n【注意】ファイルが見つからないみたいです…。")
+        print("ファイル名が間違っていないか、もう一度確認をお願いします。")
+
+    print("\n--- 処理終了です ---")
