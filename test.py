@@ -3,12 +3,12 @@ import cv2
 import numpy as np
 import os
 
-def analyze_contracts(pdf_path, template_path, rel_stamp_coords):
+def analyze_contracts(pdf_path, template_path, rel_stamp_coords, debug_folder="."):
     """
     契約書を特定し、ハンコ（赤色）があるか調べる関数です。
+    デバッグ機能付き。
     """
 
-    # --- ファイルが存在するか、念のためここでも確認します ---
     if not os.path.exists(template_path):
         print(f"【エラー】テンプレート画像が見つかりません: {template_path}")
         return []
@@ -20,10 +20,12 @@ def analyze_contracts(pdf_path, template_path, rel_stamp_coords):
     # 1. テンプレート画像を読み込み
     template = cv2.imread(template_path, 0)
     if template is None:
-        print("【エラー】テンプレート画像の読み込みに失敗しました。画像ファイルか確認してください。")
+        print("【エラー】テンプレート画像の読み込みに失敗しました。")
         return []
+    
+    # テンプレートの幅と高さを取得（枠を描くために使います）
+    t_h, t_w = template.shape[:2]
 
-    # 2. PDFを開きます
     try:
         pdf = pdfium.PdfDocument(pdf_path)
     except Exception as e:
@@ -37,21 +39,18 @@ def analyze_contracts(pdf_path, template_path, rel_stamp_coords):
     for i, page in enumerate(pdf):
         page_num = i + 1
         
-        # scale=2.0 で高画質化 (144dpi相当)
         bitmap = page.render(scale=2.0, rev_byteorder=False)
         pil_image = bitmap.to_pil()
         img_bgr = np.array(pil_image)
         
-        # 色変換 (RGB -> BGR)
         img_bgr = cv2.cvtColor(img_bgr, cv2.COLOR_RGB2BGR)
         img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
 
-        # --- A. 契約書判定 (テンプレートマッチング) ---
+        # --- A. 契約書判定 ---
         res = cv2.matchTemplate(img_gray, template, cv2.TM_CCOEFF_NORMED)
         min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
         score = max_val
 
-        # 一致度が 0.8 未満ならスキップ
         if score < 0.8:
             continue
 
@@ -64,7 +63,6 @@ def analyze_contracts(pdf_path, template_path, rel_stamp_coords):
         s_w = int(rw)
         s_h = int(rh)
 
-        # 画像範囲チェック
         h_img, w_img = img_bgr.shape[:2]
         s_x = max(0, min(s_x, w_img))
         s_y = max(0, min(s_y, h_img))
@@ -77,8 +75,6 @@ def analyze_contracts(pdf_path, template_path, rel_stamp_coords):
         
         if crop_img.size > 0:
             hsv = cv2.cvtColor(crop_img, cv2.COLOR_BGR2HSV)
-            
-            # 赤色の範囲 (2パターン)
             mask1 = cv2.inRange(hsv, np.array([0, 50, 50]), np.array([10, 255, 255]))
             mask2 = cv2.inRange(hsv, np.array([170, 50, 50]), np.array([180, 255, 255]))
             mask = mask1 + mask2
@@ -89,9 +85,22 @@ def analyze_contracts(pdf_path, template_path, rel_stamp_coords):
             if total_pixels > 0:
                 red_ratio = red_pixels / total_pixels
             
-            # 1%以上で「ハンコあり」
             if red_ratio > 0.01:
                 has_stamp = True
+
+        # ==========================================
+        #   ★ デバッグ用画像の保存（答え合わせ）
+        # ==========================================
+        # 1. 見つけたテンプレートの場所に【青枠】を描く (B, G, R) = (255, 0, 0)
+        cv2.rectangle(img_bgr, (found_x, found_y), (found_x + t_w, found_y + t_h), (255, 0, 0), 4)
+        
+        # 2. ハンコを探した場所に【赤枠】を描く (B, G, R) = (0, 0, 255)
+        cv2.rectangle(img_bgr, (s_x, s_y), (s_x + s_w, s_y + s_h), (0, 0, 255), 4)
+        
+        # 3. 画像をファイルとして保存する
+        debug_filename = os.path.join(debug_folder, f"debug_page_{page_num}.jpg")
+        cv2.imwrite(debug_filename, img_bgr)
+        # ==========================================
 
         results.append({
             "page": page_num,
@@ -103,46 +112,36 @@ def analyze_contracts(pdf_path, template_path, rel_stamp_coords):
     return results
 
 # ==========================================
-#   ここから実行部分です（ここを修正しました）
+#   実行部分
 # ==========================================
 
 if __name__ == "__main__":
-    # ★重要：このファイルの場所（フォルダ）を自動で取得します
-    # これがあれば、どこで実行しても「隣にあるファイル」をちゃんと探せます
     current_folder = os.path.dirname(os.path.abspath(__file__))
 
-    # 1. 調査したいPDFファイル名
-    # os.path.join を使って、フォルダとファイル名を正しくつなぎます
-    pdf_filename = "sample_contract.pdf"  # ← ここは実際のファイル名に変えてください
+    pdf_filename = "sample_contract.pdf"
     target_pdf = os.path.join(current_folder, pdf_filename)
     
-    # 2. テンプレート画像名
-    template_filename = "header_template.png"  # ← ここも実際のファイル名に
+    template_filename = "header_template.png"
     template_img = os.path.join(current_folder, template_filename)
     
-    # パスの確認（実行時に表示されます）
-    print(f"調査対象PDF: {target_pdf}")
-    print(f"テンプレート: {template_img}")
-
-    # 3. ハンコの位置設定 (x, y, w, h)
-    # テンプレート画像の左上からの距離です
-    # ※うまくいかない時は、ここの数値を調整してみてください
+    # 座標: (右への移動量, 下への移動量, 枠の幅, 枠の高さ)
     stamp_relative_pos = (50, 200, 150, 150) 
 
-    # 関数実行
     if os.path.exists(target_pdf) and os.path.exists(template_img):
-        data = analyze_contracts(target_pdf, template_img, stamp_relative_pos)
+        # 実行
+        data = analyze_contracts(target_pdf, template_img, stamp_relative_pos, current_folder)
         
-        # 結果表示
         if not data:
-            print("\n契約書は見つかりませんでした。（座標がずれているか、一致度が低いかもしれません）")
+            print("\n契約書は見つかりませんでした。")
         else:
-            print(f"\n★ {len(data)} 件の契約書が見つかりました！ です！\n")
+            print(f"\n★ {len(data)} 件の契約書が見つかりました！\n")
             for item in data:
                 result_str = "【合格】押印あり" if item["has_stamp"] else "【未処理】押印なし！！"
                 print(f"ページ: {item['page']} | 一致度: {item['score']:.2f} | 赤色率: {item['red_ratio']:.2%} -> {result_str}")
+            
+            print("\n【確認】プログラムと同じフォルダに『debug_page_〇〇.jpg』という画像が保存されました！")
+            print("青枠が『タイトルを見つけた場所』、赤枠が『ハンコを探した場所』です。座標が合っているか確認してみてくださいね。")
     else:
         print("\n【注意】ファイルが見つかりません。")
-        print("ファイル名が合っているか、拡張子(.pngや.pdf)が正しいか確認してみてください。")
 
     print("\n--- 処理終了 ---")
